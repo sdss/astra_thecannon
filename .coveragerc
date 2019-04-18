@@ -1,0 +1,8 @@
+[run]
+branch = true
+
+[report]
+omit =
+    python/thecannon/etc/*
+    python/thecannon/utils/*
+    python/thecannon/tests/*
