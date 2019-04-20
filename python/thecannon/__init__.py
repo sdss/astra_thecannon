@@ -1,39 +1,40 @@
-# encoding: utf-8
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-from __future__ import absolute_import, division, print_function, unicode_literals
+__version__ = "0.2.93"
 
-import os
+import logging
+from numpy import RankWarning
+from warnings import simplefilter
 
-import yaml
+from .model import CannonModel
+from . import (censoring, fitting, plot, utils, vectorizer)
 
-# Inits the logging system. Only shell logging, and exception and warning catching.
-# File logging can be started by calling log.start_file_logger(name).
-from .utils import log
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG) # TODO: Remove this when stable.
 
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(handler)
 
-def merge(user, default):
-    """Merges a user configuration with the default one."""
-
-    if isinstance(user, dict) and isinstance(default, dict):
-        for kk, vv in default.items():
-            if kk not in user:
-                user[kk] = vv
-            else:
-                user[kk] = merge(user[kk], vv)
-
-    return user
+simplefilter("ignore", RankWarning)
+simplefilter("ignore", RuntimeWarning)
 
 
-NAME = 'thecannon'
+def load_model(path, **kwargs):
+    """
+    Load a Cannon model from an existing filename, regardless of the kind of
+    Cannon model sub-class.
+
+    :param path:
+        The path where the model has been saved. This saved model must include
+        a labelled data set.
+    """
+
+    print("deprecated; use CannonModel.read") # TODO
+    return CannonModel.read(path, **kwargs)
 
 
-# Loads config
-config = yaml.load(open(os.path.dirname(__file__) + '/etc/{0}.yml'.format(NAME)))
-
-# If there is a custom configuration file, updates the defaults using it.
-custom_config_fn = os.path.expanduser('~/.{0}/{0}.yml'.format(NAME))
-if os.path.exists(custom_config_fn):
-    config = merge(yaml.load(open(custom_config_fn)), config)
-
-
-__version__ = '0.1.0dev'
+# Clean up the top-level namespace for this module.
+del handler, logger, logging, RankWarning, simplefilter

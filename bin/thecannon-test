@@ -1,0 +1,148 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import argparse
+import os
+import sys
+import pickle
+import yaml
+from astropy.table import Table
+from warnings import warn
+
+from astra import log, utils
+from astra.tools.spectrum import (Spectrum1D, SpectrumList)
+
+from thecannon.model import CannonModel
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(prog=os.path.basename(__file__),
+                        description="Use a data-driven model of stellar spectra to estimate labels")
+    # Required arguments by Astra.
+    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
+                        help="verbose logging")
+    parser.add_argument("-i", "--from-file", action="store_true", default=False,
+                        help="specifies that the INPUT_PATH is a text file that contains a list of "
+                             "input paths that are separated by new lines")
+    parser.add_argument("input_path",
+                        help="local path to a reduced data product, or a file that contains a list "
+                             "of paths to reduced data products if the -i flag is used")
+    parser.add_argument("output_dir",
+                        help="directory for analysis outputs")
+
+    # Model arguments.
+    parser.add_argument("model_path",
+                        help="the path to a pre-trained model")
+
+    # TODO: how to define this....
+    # Continuum arguments.
+    parser.add_argument("--continuum", action="store_true",
+                        help="fit the pseudo-continuum")
+    parser.add_argument("--continuum-path", dest="continuum_path", default=None,
+                        help="the path to a file describing ranges of continuum pixels")
+    parser.add_argument("--continuum-length-scale", dest="continuum_length_scale", default=1400,
+                        help="the length scale (in pixels) for the sine and cosine functions used "\
+                             "in determining the continuum (default: 1400)")
+    parser.add_argument("--continuum-order", dest="continuum_order", default=3,
+                        help="the number of sine and cosine functions to use to fit the continuum "\
+                             "(default: 3)")
+
+    # Optimization arguments.
+    parser.add_argument("--initializations", default=1,
+                        help="the number of initial points to optimize from (default: 1)")
+
+    # Operational arguments.
+    parser.add_argument("-t", "--threads", dest="threads", default=1,
+                        help="number of parallel threads to use")
+
+
+    
+    # We *must* use parser.parse_known_args() here otherwise this tool will fail
+    # when Astra provides the -i flag, which here is assumed by default because
+    # we would never train The Cannon with one spectrum, because that would be
+    # dumb.
+    args, unknown = parser.parse_known_args()
+
+    # Load in all the input paths.
+    if args.from_file:
+        with open(args.input_path, "r") as fp:
+            input_paths = map(str.strip, fp.readlines)
+
+    else:
+        input_paths = [args.input_path]
+
+    # Load the model.
+    model = CannonModel.read(args.model_path)
+    log.info(f"Loaded Cannon model from {args.model_path}: {model}")
+
+    # Check continuum.
+    if not args.continuum:
+        warn("No continuum normalization will occur.")
+        continuum_kwds = dict()
+
+    else:
+        if args.continuum_path is None:
+            parser.error("continuum_path is required when --continuum is set")
+
+        log.info(f"Loading continuum regions from {args.continuum_path}")
+        with open(args.continuum_path, "r") as fp:
+            continuum_regions = yaml.load(fp)
+
+        # Construct the continuum pixels from the model dispersion.    
+        continuum_kwds = dict(L=args.continuum_length_scale,
+                              order=args.continuum_order,
+                              continuum_pixels=utils.create_mask(model.dispersion, continuum_regions))
+
+    # Prepare outputs.
+    os.makedirs(args.output_dir, exist_ok=True)
+    log.info(f"Created output directory {args.output_dir}")
+
+    test_kwds = dict(initializations=args.initializations)
+
+    # For each input_path we must do the following:
+    for input_path in input_paths:
+
+        # 1. Load the spectra.
+        # For some data models this could truly be a list of spectra of different sources.
+        # But for most it will be a Spectrum1D that may have multiple visits and spectra that have
+        # been combined in various ways.
+        spectra = SpectrumList.read(input_path)
+
+        if len(spectra) > 1:
+            # The spectra are of different objects.
+            # This is the case with MaStar spectra.
+            # TODO: Not sure if we *should* handle this yet.
+            raise NotImplementedError("MaNGA MaStar spectra cannot be processed by this component yet")
+
+        spectrum = spectra[0]
+        N_spectra, N_pixels = spectrum.flux.shape
+
+        raise a
+        # 2. Re-sample onto the model dispersion.
+        # Re-sample onto the model dispersion.
+        # TODO: put this into the cannon utils because it will be needed for
+        #       training
+
+        # 3. Continuum-normalize if instructed.
+        if continuum_kwds:
+            # Do stuff
+            raise NotImplementedError
+
+
+        # 4. Run the test step on the spectra.
+        labels, cov, meta = model.test(normalized_flux, normalized_ivar, **test_kwds)
+
+        # 5. Save the outputs.
+        # TODO: We need a data model specification for this.
+        basename, extension = os.path.splitext(os.path.basename(input_path))
+        output_path = os.path.join(args.output_dir, f"{basename}.pkl")
+
+        with open(output_path, "wb") as fp:
+            pickle.dump((labels, cov, meta), fp)
+
+        log.info(f"Wrote output to {output_path}")
+
+

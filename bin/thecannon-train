@@ -1,0 +1,226 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import argparse
+import numpy as np
+import os
+import sys
+from astropy.table import join, unique
+from collections import Counter
+from astropy.table import Table
+from warnings import warn
+
+from astra import log
+from astra.utils.data_models import parse_descriptors
+from astra.tools.spectrum import Spectrum1D
+
+from thecannon import continuum
+
+
+def _get_most_probable_cross_match(paths, labels, ignore_duplicates=False):
+
+    # Get descriptors for every path first.
+    data_model, descriptors = parse_descriptors(paths[0])
+    consider_label_names = set(descriptors.keys()).intersection(labels.dtype.names)
+
+    if ignore_duplicates:
+        N_before = len(labels)
+        labels = unique(labels, keys=list(consider_label_names))
+        N_duplicates = N_before - len(labels)
+        warn(f"There were {N_duplicates} rows (on {consider_label_names}) that will be *ignored*!")
+
+    dtypes = {ln: labels[ln].data.dtype for ln in consider_label_names}
+
+    N_paths = len(paths)
+    t = {ln: np.empty(N_paths, dtype=dtypes[ln]) for ln in consider_label_names}
+
+    for i, path in enumerate(paths):
+        data_model, descriptors = parse_descriptors(path)
+        for label_name in consider_label_names:
+            value = descriptors[label_name]
+
+            # Ensure we match whitespace padding that astropy.table inflicts upon us.
+            if dtypes[label_name].kind in "S":
+                value = ("{{0: <{0}}}".format(dtypes[label_name].itemsize)).format(value)
+            t[label_name][i] = value
+
+    t["__input_path__"] = paths
+
+    t2 = join(t, labels)
+
+    # Check for unique entries.
+    g = t2.group_by(list(consider_label_names))
+    diffs = np.diff(g.groups.indices)
+    if max(set(diffs)) > 1 and not ignore_duplicates:
+        indices = np.where(diffs > 1)[0]
+        raise ValueError(f"""
+            Multiple matches for {len(indices)} input paths: could not uniquely 
+            define them from the available path descriptors. Either (1) give a
+            LABEL_PATH file without duplicates (in {consider_label_names}),
+            restrict the training set input spectra to avoid duplicates,
+            or live life *very dangerously* and use the --ignore-duplicates flag.
+            Examples of duplicates include:
+            {g.groups[indices]}""".strip())
+
+    return t2
+
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(prog=os.path.basename(__file__),
+                        description="Train a data-driven model of stellar spectra using The Cannon")
+    # Required arguments by Astra.
+    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
+                        help="verbose logging")
+    parser.add_argument("input_path",
+                        help="an ascii file containing the paths to reduced data products (spectra)"\
+                             " to use for training the model")
+    parser.add_argument("output_dir",
+                        help="directory for analysis outputs")
+
+    # Label arguments.
+    parser.add_argument("label_path",
+                        help="the path to a data table that contains the labels for all input paths")
+    parser.add_argument("label_names", 
+                        help="a comma-separated list of the label names to include in the model")
+    parser.add_argument("--ignore-duplicates", action="store_true",
+                        help="if the INPUT_PATHs cannot be uniquely identified as rows in the "\
+                             "LABEL_PATH file, then ignore the duplicate rows (default: False)")
+
+    # Continuum arguments.
+    parser.add_argument("--continuum", action="store_true",
+                        help="fit the pseudo-continuum")
+    parser.add_argument("--continuum-regions-path", dest="continuum_regions_Path", default=None,
+                        help="the path to a file describing regions of continuum pixels")
+    parser.add_argument("--continuum-length-scale", dest="continuum_length_scale", default=1400,
+                        help="the length scale (in pixels) for the sine and cosine functions used "\
+                             "in determining the continuum (default: 1400)")
+    parser.add_argument("--continuum-order", dest="continuum_order", default=3,
+                        help="the number of sine and cosine functions to use to fit the continuum "\
+                             "(default: 3)")
+
+    # Model arguments.
+    parser.add_argument("--order", dest="order", default=1,
+                        help="the polynomial order of the model to use (default: 1; linear)")
+    parser.add_argument("--lambda", dest="lambda", default=0,
+                        help="the L1 regularization hyperparameter to use (default: 0)")
+
+    # Operational arguments.
+    parser.add_argument("-t", "--threads", dest="threads", default=1,
+                        help="number of parallel threads to use")
+    
+    # We *must* use parser.parse_known_args() here otherwise this tool will fail
+    # when Astra provides the -i flag, which here is assumed by default because
+    # we would never train The Cannon with one spectrum, because that would be
+    # dumb.
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        warn(f"Ignoring unknown arguments: {unknown}")
+
+    # Load in all the input paths.
+    log.info("Checking input paths")
+    with open(args.input_path, "r") as fp:
+        input_paths = list(map(str.strip, fp.readlines()))
+
+    # Check for duplicates in input_paths.
+    if len(set(input_paths)) < len(input_paths):
+        counts = Counter(input_paths)
+        duplicates = "\n".join([f"\t{k}: {v} entries" for k, v in counts.items() if v > 1])
+        parser.error(f"there are duplicate paths in {args.input_path}:\n"
+                     f"{duplicates}")
+
+    # Load in all the labels.
+    labels = Table.read(args.label_path)
+
+    # Ensure we can match the labels to the appropriate input paths.
+    if len(labels) == len(input_paths):
+        warn("We assume that each row in input_path corresponds to the same row in labels.")
+
+    else:
+        # For each input_path we have to infer the properties of the object
+        # and match it to things that are available in the labels file.
+        log.info(f"There are a different number of rows in {args.label_path} than input paths")
+        log.info(f"Cross-matching rows in {args.label_path} to their most likely input path..")
+        labels = _get_most_probable_cross_match(input_paths, labels, 
+                                                ignore_duplicates=args.ignore_duplicates)
+        input_paths = labels["__input_path__"]
+
+    # Build the labels array.
+    label_names = args.label_names.split(",")
+    log.info(f"Label names to use: {label_names}")
+    training_set_labels = np.array([labels[ln] for ln in label_names]).T
+
+    for i, label_name in enumerate(label_names):
+        minmax = [np.min(training_set_labels.T[i]), np.max(training_set_labels.T[i])]
+        log.info(f"Minimum/maximum {label_name}: {minmax}")
+
+
+    N_paths = len(input_paths)
+    N_pixels = Spectrum1D.read(input_paths[0]).wavelength.size
+
+    log.info(f"There are {N_paths} spectra in the training set")
+    log.info(f"There are {N_pixels} assumed per spectrum")
+
+    wavelengths = np.zeros((N_paths, N_pixels), dtype=float)
+    flux = np.ones_like(wavelengths)
+    ivar = np.zeros_like(wavelengths)
+
+    # Continuum normalize if necessary.
+    continuum_kwds = dict()
+    if args.continuum:
+        continuum_kwds.update(L=args.continuum_length_scale, order=args.continuum_order)
+        if args.continuum_regions_path is not None:
+            continuum_kwds.update(continuum_regions=np.loadtxt(args.continuum_regions_path))
+
+        log.info(f"Pseudo-continuum normalization keywords: {continuum_kwds}")
+        log.info(f"Loading training set spectra and normalizing..")
+
+    else:
+        log.info(f"No pseudo-continuum normalization will take place!")
+        log.info(f"Loading training set spectra..")
+
+
+    for i, input_path in enumerate(input_paths):
+
+        if not os.path.exists(input_path):
+            log.info(f"Path {input_path} does not exist. Skipping..")
+            continue
+
+        spectrum = Spectrum1D.read(basename)
+
+        wavelengths[i] = spectrum.wavelength.value
+        
+        # Continuum normalize if necessary
+        if continuum_kwds:
+            norm_flux, norm_ivar, cont, meta = continuum.normalize(
+                spectrum.wavelength.value, 
+                spectrum.flux.value, 
+                spectrum.uncertainty.array, **continuum_kwds)
+
+            flux[i] = norm_flux[0]
+            ivar[i] = norm_ivar[0]
+
+        else:
+            flux[i] = spectrum.flux.value[0]
+            ivar[i] = spectrum.uncertainty.array[0]
+
+    log.info(f"Training set spectra loaded. Re-sampling to common dispersion mapping..")
+
+    # Put everything on a common wavelength scale.
+    common_wavelengths = np.linspace(np.max(wavelengths.T[0])
+    
+    log.info(f"Training the model..")
+    
+
+    # Train the model.
+
+    # Output the model.
+
+
+
+    # Prepare outputs.
+    os.makedirs(args.output_dir, exist_ok=True)
+    log.info(f"Created output directory {args.output_dir}")
