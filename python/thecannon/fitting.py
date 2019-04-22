@@ -11,12 +11,12 @@ from __future__ import (division, print_function, absolute_import,
 __all__ = ["fit_spectrum", "fit_pixel_fixed_scatter", "fit_theta_by_linalg",
     "chi_sq", "L1Norm_variation"]
 
-import logging
 import numpy as np
 import scipy.optimize as op
 from time import time
+from warnings import warn
 
-logger = logging.getLogger(__name__)
+from astra.utils import log
 
 
 def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
@@ -66,7 +66,7 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
     L = len(vectorizer.label_names)
 
     if not np.any(use):
-        logger.warn("No information in spectrum!")
+        log.error("No information in spectrum!")
         return (np.nan * np.ones(L), None, {
                 "fail_message": "Pixels contained no information"})
 
@@ -84,12 +84,11 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
 
         except NotImplementedError:
             Dfun = None
-            logger.warn("No label vector derivatives available in {}!".format(
-                vectorizer))
+            log.error(f"No label vector derivatives available in {vectorizer}!")
 
         except:
-            logger.exception("Exception raised when trying to calculate the "\
-                             "label vector derivative at the fiducial values:")
+            log.error("Exception raised when trying to calculate the "\
+                      "label vector derivative at the fiducial values:")
             raise
 
         else:
@@ -133,7 +132,7 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
                 x0=(x0 - fiducials)/scales, full_output=True, **kwds)
 
         except RuntimeError:
-            logger.exception("Exception in fitting from {}".format(x0))
+            log.exception("Exception in fitting from {}".format(x0))
             continue
 
         meta.update(
@@ -141,7 +140,7 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
         results.append((op_labels, cov, meta))
 
     if len(results) == 0:
-        logger.warn("No results found!")
+        log.error("No results found!")
         return (np.nan * np.ones(L), None, dict(fail_message="No results found"))
 
     best_result_index = np.nanargmin([m["chi_sq"] for (o, c, m) in results])
@@ -152,9 +151,7 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
     op_labels = op_labels * scales + fiducials
 
     if np.allclose(op_labels, meta["x0"]):
-        logger.warn(
-            "Discarding optimized result because it is exactly the same as the "
-            "initial value!")
+        log.error("Discarding optimized result because it is exactly the same as the initial value!")
 
         # We are in dire straits. We should not trust the result.
         op_labels *= np.nan
@@ -164,7 +161,7 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
         cov = np.ones((len(op_labels), len(op_labels)))
 
     if not np.any(np.isfinite(cov)):
-        logger.warn("Non-finite covariance matrix returned!")
+        log.error("Non-finite covariance matrix returned!")
 
     # Save additional information.
     meta.update({
@@ -343,7 +340,7 @@ def _remove_forbidden_op_kwds(op_method, op_kwds):
 
     forbidden_keys = set(op_kwds).difference(all_allowed_keys[op_method])
     if forbidden_keys:
-        logger.warn("Ignoring forbidden optimization keywords for {}: {}"\
+        warn("Ignoring forbidden optimization keywords for {}: {}"\
             .format(op_method, ", ".join(forbidden_keys)))
         for key in forbidden_keys:
             del op_kwds[key]
@@ -411,7 +408,7 @@ def fit_pixel_fixed_scatter(flux, ivar, initial_thetas, design_matrix,
 
     theta_0 = kwargs.get("__theta_0", None)
     if theta_0 is not None:
-        logger.warn("FIXING theta_0. HIGHLY EXPERIMENTAL.")
+        warn("FIXING theta_0. HIGHLY EXPERIMENTAL.")
 
         # Subtract from flux.
         # Set design matrix entry to zero.
@@ -465,7 +462,8 @@ def fit_pixel_fixed_scatter(flux, ivar, initial_thetas, design_matrix,
             if warnflag > 0:
                 reason = "too many function evaluations or too many iterations" \
                          if warnflag == 1 else metadata["task"]
-                logger.warn("Optimization warning (l_bfgs_b): {}".format(reason))
+                warn(f"Optimization warning (l_bfgs_b; {reason}; strict = {op_strict}). "\
+                     f"Further optimization warnings will be suppressed!")
 
                 if op_strict:
                     # Do optimization again.

@@ -307,12 +307,14 @@ def one_to_one(model, test_labels, cov=None, latex_label_names=None,
         # Show mean and sigma.
         if show_statistics:
             diff = y - x
-            mu = np.median(diff)
-            sigma = np.std(diff)
+            mu = np.nanmedian(diff)
+            sigma = np.nanstd(diff)
             ax.text(0.05, 0.85, r"$\mu = {0:.2f}$".format(mu),
                 transform=ax.transAxes)
             ax.text(0.05, 0.75, r"$\sigma = {0:.2f}$".format(sigma),
                 transform=ax.transAxes)
+            ax.text(0.05, 0.65, r"$N = {:.0f}$".format(np.sum(np.isfinite(diff))),
+                    transform=ax.transAxes)
         
         ax.set_aspect(1.0)
 

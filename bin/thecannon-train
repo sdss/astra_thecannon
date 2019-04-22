@@ -1,18 +1,16 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import (absolute_import, division, print_function, unicode_literals)
 
 import argparse
-import multiprocessing as mp
 import numpy as np
 import os
 
-from astropy.table import join, unique
+from astropy.table import (Table, join, unique)
 from collections import Counter
-from astropy.table import Table
-from warnings import warn
 from tqdm import tqdm 
+from warnings import warn
 
 from astra import log
 from astra.utils.data_models import parse_descriptors
@@ -123,8 +121,8 @@ if __name__ == '__main__':
                              "(default: 3)")
 
     # Model arguments.
-    parser.add_argument("--order", dest="order", default=1,
-                        help="the polynomial order of the model to use (default: 1; linear)")
+    parser.add_argument("--order", dest="order", default=2,
+                        help="the polynomial order of the model to use (default: 2; quadratic)")
     parser.add_argument("--regularization", dest="regularization", default=0,
                         help="the L1 regularization hyperparameter to use (default: 0)")
 
@@ -295,12 +293,7 @@ if __name__ == '__main__':
                         dispersion=common_wavelengths, regularization=args.regularization)
 
     log.info(f"Training the model {model}")
-    model.train()
-    
-    log.info(f"Setting s2 by Hogg heuristic")
-    model._set_s2_by_hogg_heuristic()
-
-    # TODO: Consider running Q-A one-to-one plots? Or other sensible things?
+    model.train(threads=args.threads)
 
     # Prepare outputs.
     os.makedirs(args.output_dir, exist_ok=True)
@@ -308,8 +301,24 @@ if __name__ == '__main__':
 
     # Write the model to disk.
     output_path = os.path.join(args.output_dir, "Cannon.model")
-
     model.write(output_path, include_training_set_spectra=False, overwrite=True)
 
     log.info(f"Model ({model}) written to {output_path}")
+
+    log.info(f"Running one-to-one test for sanity")
+    test_labels, cov, meta = model.test(training_set_flux, training_set_ivar, threads=args.threads)
+    fig_path = os.path.join(args.output_dir, "one-to-one.png")
+
+    log.info(f"Creating figure..")
+    try:
+        from thecannon import plot
+        fig = plot.one_to_one(model, test_labels)
+        fig.savefig(fig_path)
+
+    except:
+        log.exception("Figure could not be produced:")
+
+    else:
+        log.info(f"Created output figure {fig_path}")
+
 
