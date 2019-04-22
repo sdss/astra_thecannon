@@ -1,16 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-The Cannon.
-"""
-
 from __future__ import (division, print_function, absolute_import,
                         unicode_literals)
 
+""" The Cannon. """
+
 __all__ = ["CannonModel"]
 
-import logging
 import multiprocessing as mp
 import numpy as np
 import os
@@ -19,12 +13,14 @@ from datetime import datetime
 from functools import wraps
 from sys import version_info
 from scipy.spatial import Delaunay
+from warnings import warn
 
-from .vectorizer.base import BaseVectorizer
-from . import (censoring, fitting, utils, vectorizer as vectorizer_module, __version__)
+from astra.utils import log
 
+from thecannon import (censoring, fitting, vectorizer as vectorizer_module, __version__)
+from thecannon.vectorizer.base import BaseVectorizer
+from thecannon.utils.wrapper import Wrapper
 
-logger = logging.getLogger(__name__)
 
 
 def requires_training(method):
@@ -430,9 +426,9 @@ class CannonModel(object):
             rho_xy = rho[x, y]
             if rho_xy >= rho_warning: 
                 if x > y: # One warning per correlated label pair.
-                    logger.warn("Labels '{X}' and '{Y}' are highly correlated ("\
-                        "rho = {rho_xy:.2}). This may cause very slow training "\
-                        "times. Are both labels needed?".format(
+                    warn("Labels '{X}' and '{Y}' are highly correlated ("\
+                         "rho = {rho_xy:.2}). This may cause very slow training "\
+                         "times. Are both labels needed?".format(
                             X=self.vectorizer.label_names[x],
                             Y=self.vectorizer.label_names[y],
                             rho_xy=rho_xy))
@@ -465,7 +461,7 @@ class CannonModel(object):
 
 
     def write(self, path, include_training_set_spectra=False, overwrite=False,
-        protocol=-1):
+              protocol=-1):
         """
         Serialise the trained model and save it to disk. This will save all
         relevant training attributes, and optionally, the training data.
@@ -493,7 +489,7 @@ class CannonModel(object):
                    + list(self._data_attributes)
 
         if "metadata" in attributes:
-            logger.warn("'metadata' is a protected attribute. Ignoring.")
+            warn("'metadata' is a protected attribute. Ignoring.")
             attributes.remote("metadata")
 
         # Store up all the trained attributes and a hash of the training set.
@@ -525,9 +521,9 @@ class CannonModel(object):
             state.pop("training_set_ivar")
 
         elif not self.is_trained:
-            logger.warn("The training set spectra won't be saved, and this model"\
-                        "is not already trained. The saved model will not be "\
-                        "able to be trained when loaded!")
+            warn("The training set spectra won't be saved, and this model"\
+                 "is not already trained. The saved model will not be "\
+                 "able to be trained when loaded!")
 
         with open(path, "wb") as fp:
             pickle.dump(state, fp, protocol) 
@@ -620,7 +616,7 @@ class CannonModel(object):
         S, P = self.training_set_flux.shape
         T = self.design_matrix.shape[1]
 
-        logger.info("Training {0}-label {1} with {2} stars and {3} pixels/star"\
+        log.info("Training {0}-label {1} with {2} stars and {3} pixels/star"\
             .format(len(self.vectorizer.label_names), type(self).__name__, S, P))
 
         # Parallelise out.
@@ -631,7 +627,7 @@ class CannonModel(object):
             pool = mp.Pool(threads)
             mapper = pool.map
 
-        func = utils.wrapper(fitting.fit_pixel_fixed_scatter, None, kwds, P)
+        func = Wrapper(fitting.fit_pixel_fixed_scatter, None, kwds, P)
 
         meta = []
         theta = np.nan * np.ones((P, T))
@@ -738,7 +734,7 @@ class CannonModel(object):
             self._scales)
         kwargs = dict(use_derivatives=use_derivatives, op_kwds=op_kwds)
 
-        func = utils.wrapper(fitting.fit_spectrum, args, kwargs, S,
+        func = Wrapper(fitting.fit_spectrum, args, kwargs, S,
             message="Running test step on {} spectra".format(S))
 
         labels, cov, meta = zip(*mapper(func, zip(*(flux, ivar, initial_labels))))

@@ -4,17 +4,16 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import argparse
+import numpy as np
 import os
-import sys
 import pickle
-import yaml
-from astropy.table import Table
+from tqdm import tqdm
 from warnings import warn
 
-from astra import log, utils
-from astra.tools.spectrum import (Spectrum1D, SpectrumList)
+from astra import log
+from astra.tools.spectrum import SpectrumList
 
-from thecannon.model import CannonModel
+from thecannon import (CannonModel, continuum)
 
 
 if __name__ == '__main__':
@@ -37,12 +36,17 @@ if __name__ == '__main__':
     parser.add_argument("model_path",
                         help="the path to a pre-trained model")
 
-    # TODO: how to define this....
+    # Data arguments.
+    parser.add_argument("--spectrum-index", default=0,
+                        help="the index of the spectrum to use in the training set spectra "
+                             "(default: 0)")
+
+
     # Continuum arguments.
-    parser.add_argument("--continuum", action="store_true",
-                        help="fit the pseudo-continuum")
-    parser.add_argument("--continuum-path", dest="continuum_path", default=None,
-                        help="the path to a file describing ranges of continuum pixels")
+    parser.add_argument("--no-continuum", action="store_true",
+                        help="do not fit the pseudo-continuum")
+    parser.add_argument("--continuum-regions-path", dest="continuum_regions_path", default=None,
+                        help="the path to a file describing regions of continuum pixels")
     parser.add_argument("--continuum-length-scale", dest="continuum_length_scale", default=1400,
                         help="the length scale (in pixels) for the sine and cosine functions used "\
                              "in determining the continuum (default: 1400)")
@@ -58,18 +62,18 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--threads", dest="threads", default=1,
                         help="number of parallel threads to use")
 
-
-    
     # We *must* use parser.parse_known_args() here otherwise this tool will fail
     # when Astra provides the -i flag, which here is assumed by default because
     # we would never train The Cannon with one spectrum, because that would be
     # dumb.
     args, unknown = parser.parse_known_args()
+    if unknown:
+        warn(f"Ignoring unknown arguments: {unknown}")
 
     # Load in all the input paths.
     if args.from_file:
         with open(args.input_path, "r") as fp:
-            input_paths = map(str.strip, fp.readlines)
+            input_paths = list(map(str.strip, fp.readlines))
 
     else:
         input_paths = [args.input_path]
@@ -79,22 +83,18 @@ if __name__ == '__main__':
     log.info(f"Loaded Cannon model from {args.model_path}: {model}")
 
     # Check continuum.
-    if not args.continuum:
-        warn("No continuum normalization will occur.")
-        continuum_kwds = dict()
+    continuum_kwds = dict()
+    if not args.no_continuum:
+        continuum_kwds.update(L=args.continuum_length_scale, order=args.continuum_order)
+        if args.continuum_regions_path is not None:
+            continuum_kwds.update(continuum_regions=np.loadtxt(args.continuum_regions_path))
+
+        log.info(f"Pseudo-continuum normalization keywords: {continuum_kwds}")
 
     else:
-        if args.continuum_path is None:
-            parser.error("continuum_path is required when --continuum is set")
+        log.info(f"No pseudo-continuum normalization will take place!")
 
-        log.info(f"Loading continuum regions from {args.continuum_path}")
-        with open(args.continuum_path, "r") as fp:
-            continuum_regions = yaml.load(fp)
-
-        # Construct the continuum pixels from the model dispersion.    
-        continuum_kwds = dict(L=args.continuum_length_scale,
-                              order=args.continuum_order,
-                              continuum_pixels=utils.create_mask(model.dispersion, continuum_regions))
+    log.info(f"We will access index {args.spectrum_index} from available spectra in each input path")
 
     # Prepare outputs.
     os.makedirs(args.output_dir, exist_ok=True)
@@ -103,37 +103,56 @@ if __name__ == '__main__':
     test_kwds = dict(initializations=args.initializations)
 
     # For each input_path we must do the following:
-    for input_path in input_paths:
+    N_paths = len(input_paths)
+    for i, input_path in enumerate(tqdm(input_paths, total=N_paths)):
 
         # 1. Load the spectra.
         # For some data models this could truly be a list of spectra of different sources.
         # But for most it will be a Spectrum1D that may have multiple visits and spectra that have
         # been combined in various ways.
-        spectra = SpectrumList.read(input_path)
+        try:
+            spectra = SpectrumList.read(input_path)
+
+        except OSError:
+            log.info(f"Exception raised when loading path {input_path}")
+            continue
 
         if len(spectra) > 1:
-            # The spectra are of different objects.
-            # This is the case with MaStar spectra.
+            # The spectra are of different objects. This is the case for the MaStar spectral library.
             # TODO: Not sure if we *should* handle this yet.
             raise NotImplementedError("MaNGA MaStar spectra cannot be processed by this component yet")
 
-        spectrum = spectra[0]
+        # TODO: allow spectrum index to be able to test on *all* spectra
+        spectrum = spectra[args.spectrum_index]
         N_spectra, N_pixels = spectrum.flux.shape
 
-        raise a
         # 2. Re-sample onto the model dispersion.
         # Re-sample onto the model dispersion.
         # TODO: put this into the cannon utils because it will be needed for
         #       training
+        flux = np.interp(model.dispersion,
+                         spectrum.wavelength.value,
+                         spectrum.flux.value)
+        ivar = np.interp(model.dispersion,
+                         spectrum.wavelength.value,
+                         spectrum.uncertainty.array)
 
         # 3. Continuum-normalize if instructed.
+        # TODO: refactor continuum normalization to deal with Spectrum1D objects.
         if continuum_kwds:
-            # Do stuff
-            raise NotImplementedError
+            norm_flux, norm_ivar, cont, meta = continuum.normalize(
+                spectrum.wavelength.value, 
+                spectrum.flux.value[args.spectrum_index], 
+                spectrum.uncertainty.array[args.spectrum_index], **continuum_kwds)
 
+        else:
+            norm_flux, norm_ivar = (flux, ivar)
 
         # 4. Run the test step on the spectra.
-        labels, cov, meta = model.test(normalized_flux, normalized_ivar, **test_kwds)
+        labels, cov, meta = model.test(norm_flux, norm_ivar, **test_kwds)
+
+        raise a
+
 
         # 5. Save the outputs.
         # TODO: We need a data model specification for this.

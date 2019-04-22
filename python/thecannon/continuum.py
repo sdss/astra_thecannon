@@ -10,8 +10,9 @@ from __future__ import (division, print_function, absolute_import,
 
 __all__ = ["normalize", "sines_and_cosines"]
 
-import logging
 import numpy as np
+import os
+from warnings import warn
 
 
 def _continuum_design_matrix(dispersion, L, order):
@@ -133,14 +134,12 @@ def sines_and_cosines(dispersion, flux, ivar, continuum_pixels, L=1400, order=3,
                 [0, segment_indices, segment_indices + 1, len(warn_indices)]))
             segment_indices = segment_indices.reshape(-1, 2)
 
-            segments = ", ".join(["{:.1f} to {:.1f} ({:d} pixels)".format(
+            segments = ", ".join(["{:.1f} to {:.1f}".format(
                 dispersion[s], dispersion[e], e-s) for s, e in segment_indices])
 
-            logging.warn("Some pixels in spectrum index {0} have measured flux "
-                         "values (e.g., ivar > 0) but are not included in any "
-                         "specified continuum region. These pixels won't be "
-                         "continuum-normalised: {1}".format(i, segments))
-            
+            warn(f"Some pixels in have measured flux values (e.g., ivar > 0) but are not included "
+                 f"in any specified region ({segments}).")
+
         # Get the flux and inverse variance for this object.
         object_metadata = []
         object_flux, object_ivar = (flux[i], ivar[i])
