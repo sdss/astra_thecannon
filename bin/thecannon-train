@@ -284,7 +284,7 @@ if __name__ == '__main__':
     training_set_ivar[bad] = 0.0
     N_bad = np.sum(bad)
     f_bad = 100 * N_bad/training_set_flux.size 
-    log.info(f"Corrected {N_bad} pixels ({f_bad:.2e}%)")
+    log.info(f"Corrected {N_bad} pixels ({f_bad:.0e}%)")
 
     log.info(f"Creating the model")
 

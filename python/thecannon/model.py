@@ -150,7 +150,7 @@ class CannonModel(object):
                     trained="trained " if self.is_trained else "",
                     K=self.training_set_labels.shape[1],
                     N=self.training_set_labels.shape[0], 
-                    M=self.training_set_flux.shape[1])
+                    M=self.dispersion.size)
 
 
     def __repr__(self):
@@ -673,8 +673,8 @@ class CannonModel(object):
 
 
     @requires_training
-    def test(self, flux, ivar, initial_labels=None, threads=None, 
-        use_derivatives=True, op_kwds=None):
+    def test(self, flux, ivar, initial_labels=None, initialisations=1,
+             threads=None, use_derivatives=True, op_kwds=None, **kwargs):
         """
         Run the test step on spectra.
 
@@ -687,6 +687,11 @@ class CannonModel(object):
         :param initial_labels: [optional]
             The initial labels to try for each spectrum. This can be a single
             set of initial values, or one set of initial values for each star.
+
+        :param initialisations: [optional]
+            The number of initial starting points to use, based on percentiles
+            of the labels in the training set. This is ignored if`initial_labels`
+            is given. 
 
         :param threads: [optional]
             The number of parallel threads to use.
@@ -720,22 +725,27 @@ class CannonModel(object):
             raise ValueError("flux and ivar arrays must be the same shape")
 
         if initial_labels is None:
-            initial_labels = self._fiducials
+            if initialisations == 1:
+                initial_labels = self._fiducials
 
-        # TODO: be able to supply a number of initial starting guesses and then
-        #       it will take those as percentiles of the training set labels.
+            else:
+                # Chose initialisations from the percentiles of the labels in the training set.
+                percentiles = np.linspace(0, 100, int(initialisations) + 2)[1:-1]
+                initial_labels = np.percentile(self.training_set_labels, percentiles, axis=0)
 
         initial_labels = np.atleast_2d(initial_labels)
         if initial_labels.shape[0] != S and len(initial_labels.shape) == 2:
+            # What the hell?
             initial_labels = np.tile(initial_labels.flatten(), S)\
                              .reshape(S, -1, len(self._fiducials))
 
         args = (self.vectorizer, self.theta, self.s2, self._fiducials, 
             self._scales)
-        kwargs = dict(use_derivatives=use_derivatives, op_kwds=op_kwds)
+        kwds = dict(use_derivatives=use_derivatives, op_kwds=op_kwds)
 
-        func = Wrapper(fitting.fit_spectrum, args, kwargs, S,
-            message="Running test step on {} spectra".format(S))
+        message = kwargs.get("message", f"Running test step on {S} spectra")
+        N = kwargs.get("N", S)
+        func = Wrapper(fitting.fit_spectrum, args, kwds, N, message=message, )
 
         labels, cov, meta = zip(*mapper(func, zip(*(flux, ivar, initial_labels))))
 

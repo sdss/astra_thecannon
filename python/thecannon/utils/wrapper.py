@@ -63,6 +63,9 @@ class Wrapper(object):
         """
 
         self.N = int(N)
+
+        if self.N < 0:
+            return
         
         try:
             rows, columns = os.popen('stty size', 'r').read().split()
