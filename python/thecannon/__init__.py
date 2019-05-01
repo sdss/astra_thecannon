@@ -1,40 +1,43 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+# encoding: utf-8
 
-__version__ = "0.2.93"
+from __future__ import absolute_import, division, print_function, unicode_literals
 
-import logging
-from numpy import RankWarning
-from warnings import simplefilter
+import os
 
-from .model import CannonModel
-from . import (censoring, fitting, plot, utils, vectorizer)
+import yaml
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG) # TODO: Remove this when stable.
-
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s"))
-logger.addHandler(handler)
-
-simplefilter("ignore", RankWarning)
-simplefilter("ignore", RuntimeWarning)
+# Inits the logging system. Only shell logging, and exception and warning catching.
+# File logging can be started by calling log.start_file_logger(name).
+from .utils import log
 
 
-def load_model(path, **kwargs):
-    """
-    Load a Cannon model from an existing filename, regardless of the kind of
-    Cannon model sub-class.
+def merge(user, default):
+    """Merges a user configuration with the default one."""
 
-    :param path:
-        The path where the model has been saved. This saved model must include
-        a labelled data set.
-    """
+    if isinstance(user, dict) and isinstance(default, dict):
+        for kk, vv in default.items():
+            if kk not in user:
+                user[kk] = vv
+            else:
+                user[kk] = merge(user[kk], vv)
 
-    print("deprecated; use CannonModel.read") # TODO
-    return CannonModel.read(path, **kwargs)
+    return user
 
 
-# Clean up the top-level namespace for this module.
-del handler, logger, logging, RankWarning, simplefilter
+NAME = 'astra_thecannon'
+
+
+# Loads config
+config_path = os.path.dirname(__file__) + '/etc/{0}.yml'.format(NAME)
+with open(config_path, "r") as fp:
+    config = yaml.load(fp, Loader=yaml.FullLoader)
+
+# If there is a custom configuration file, updates the defaults using it.
+custom_config_path = os.path.expanduser('~/.{0}/{0}.yml'.format(NAME))
+if os.path.exists(custom_config_path):
+    with open(custom_config_path, "r") as fp:
+        custom_config = yaml.load(fp, Loader=yaml.FullLoader)
+    config = merge(custom_config, config)
+
+
+__version__ = '0.1.0dev'
