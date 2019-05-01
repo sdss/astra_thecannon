@@ -14,6 +14,7 @@ from warnings import warn
 
 from astra import log
 from astra.utils.data_models import parse_descriptors
+from astra.tools.parsers.common import component_parser
 from astra.tools.spectrum import Spectrum1D
 
 from thecannon import (CannonModel, continuum, vectorizer)
@@ -83,16 +84,8 @@ def _get_most_probable_cross_match(paths, labels, ignore_duplicates=False):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(prog=os.path.basename(__file__),
-                        description="Train a data-driven model of stellar spectra using The Cannon")
-    # Required arguments by Astra.
-    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
-                        help="verbose logging")
-    parser.add_argument("input_path",
-                        help="an ascii file containing the paths to reduced data products (spectra)"\
-                             " to use for training the model")
-    parser.add_argument("output_dir",
-                        help="directory for analysis outputs")
+    parser = component_parser(prog=os.path.basename(__file__),
+                              description="The Cannon: A data-driven model for stellar spectra")
 
     # Label arguments.
     parser.add_argument("label_path",

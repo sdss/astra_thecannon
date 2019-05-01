@@ -10,6 +10,7 @@ from tqdm import tqdm
 from warnings import warn
 
 from astra import log
+from astra.tools.parsers.common import component_parser
 from astra.tools.spectrum import SpectrumList
 
 from thecannon import (CannonModel, continuum)
@@ -17,8 +18,9 @@ from thecannon import (CannonModel, continuum)
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(prog=os.path.basename(__file__),
-                        description="Use a data-driven model of stellar spectra to estimate labels")
+    parser = component_parser(prog=os.path.basename(__file__),
+                              description="The Cannon: A data-driven model for stellar spectra")
+
     # Required arguments by Astra.
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
                         help="verbose logging")
