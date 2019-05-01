@@ -40,4 +40,4 @@ if os.path.exists(custom_config_path):
     config = merge(custom_config, config)
 
 
-__version__ = '0.1.0dev'
+__version__ = '0.1.0'
