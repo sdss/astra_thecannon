@@ -13,7 +13,8 @@ from astra import log
 from astra.tools.parsers.common import component_parser
 from astra.tools.spectrum import SpectrumList
 
-from thecannon import (CannonModel, continuum)
+from thecannon import continuum
+from thecannon.model import CannonModel
 
 
 if __name__ == '__main__':
@@ -71,13 +72,6 @@ if __name__ == '__main__':
     if unknown:
         warn(f"Ignoring unknown arguments: {unknown}")
 
-    # Load in all the input paths.
-    if args.from_file:
-        with open(args.input_path, "r") as fp:
-            input_paths = list(map(str.strip, fp.readlines()))
-
-    else:
-        input_paths = [args.input_path]
 
     # Load the model.
     model = CannonModel.read(args.model_path)
@@ -107,8 +101,8 @@ if __name__ == '__main__':
     # TODO: spread over threads?
 
     # For each input_path we must do the following:
-    N_paths = len(input_paths)
-    for i, input_path in enumerate(tqdm(input_paths, total=N_paths)):
+    N_paths = len(args.input_paths)
+    for i, input_path in enumerate(tqdm(args.input_paths, total=N_paths)):
 
         # 1. Load the spectra.
         # For some data models this could truly be a list of spectra of different sources.
@@ -157,7 +151,10 @@ if __name__ == '__main__':
 
         # 5. Save the outputs.
         # TODO: We need a data model specification for this.
-        warn("Not saving output because no data model exists yet!")
+        log.info(f"Inferred labels: {labels}")
+        log.info(f"Metadata: {meta}")
+        log.error("Not saving output because no data model exists yet!")
+
         """
         basename, extension = os.path.splitext(os.path.basename(input_path))
         output_path = os.path.join(args.output_dir, f"{basename}.pkl")

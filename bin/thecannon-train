@@ -17,7 +17,8 @@ from astra.utils.data_models import parse_descriptors
 from astra.tools.parsers.common import component_parser
 from astra.tools.spectrum import Spectrum1D
 
-from thecannon import (CannonModel, continuum, vectorizer)
+from thecannon import continuum, vectorizer
+from thecannon.model import CannonModel
 
 
 def _get_most_probable_cross_match(paths, labels, ignore_duplicates=False):
@@ -133,14 +134,9 @@ if __name__ == '__main__':
     if unknown:
         warn(f"Ignoring unknown arguments: {unknown}")
 
-    # Load in all the input paths.
-    log.info("Checking input paths..")
-    with open(args.input_path, "r") as fp:
-        input_paths = list(map(str.strip, fp.readlines()))
-
     # Check for duplicates in input_paths.
-    if len(set(input_paths)) < len(input_paths):
-        counts = Counter(input_paths)
+    if len(set(args.input_paths)) < len(args.input_paths):
+        counts = Counter(args.input_paths)
         duplicates = "\n".join([f"\t{k}: {v} entries" for k, v in counts.items() if v > 1])
         parser.error(f"there are duplicate paths in {args.input_path}:\n"
                      f"{duplicates}")
@@ -150,7 +146,7 @@ if __name__ == '__main__':
     labels = Table.read(args.label_path)
 
     # Ensure we can match the labels to the appropriate input paths.
-    if len(labels) == len(input_paths):
+    if len(labels) == len(args.input_paths):
         warn(f"Assuming each row in INPUT_PATHs corresponds to the same row in LABELS_PATH! "
               "If this is not true then you're going to have a very bad time!")
 
@@ -159,9 +155,9 @@ if __name__ == '__main__':
         # and match it to things that are available in the labels file.
         log.info(f"There are a different number of rows in {args.label_path} than input paths")
         log.info(f"Cross-matching rows in {args.label_path} to their most likely input path..")
-        labels = _get_most_probable_cross_match(input_paths, labels, 
+        labels = _get_most_probable_cross_match(args.input_paths, labels, 
                                                 ignore_duplicates=args.ignore_duplicates)
-        input_paths = labels["__input_path__"]
+        args.input_paths = labels["__input_path__"]
 
     # Build the labels array.
     label_names = args.label_names.split(",")
@@ -173,7 +169,7 @@ if __name__ == '__main__':
         log.info(f"Minimum/maximum {label_name} in training set: {minmax}")
 
     # Find the first useful spectrum.
-    for first_spectrum_idx, input_path in enumerate(input_paths):
+    for first_spectrum_idx, input_path in enumerate(args.input_paths):
         try:
             N_pixels = Spectrum1D.read(input_path).wavelength.size
 
@@ -186,7 +182,7 @@ if __name__ == '__main__':
     else:
         raise IOError("all input paths are corrupt or missing")
 
-    N_paths = len(input_paths)
+    N_paths = len(args.input_paths)
     log.info(f"There are {N_paths} spectra in the training set")
     log.info(f"There are {N_pixels} assumed per spectrum")
     log.info(f"Using spectrum index {args.spectrum_index} (zero-indexed) from --spectrum-index")
@@ -209,7 +205,7 @@ if __name__ == '__main__':
         log.info(f"No pseudo-continuum normalization will take place!")
         log.info(f"Loading training set spectra..")
 
-    for i, input_path in enumerate(tqdm(input_paths)):
+    for i, input_path in enumerate(tqdm(args.input_paths)):
 
         if not os.path.exists(input_path):
             log.info(f"Path {input_path} does not exist. Skipping..")
