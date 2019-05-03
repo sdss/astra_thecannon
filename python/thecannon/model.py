@@ -553,33 +553,27 @@ class CannonModel(object):
         # Parse the state.
         metadata = state.get("metadata", {})
         version_saved = metadata.get("version", "0.1.0")
-        if version_saved >= "0.2.0": # Refactor'd.
 
-            init_attributes = list(metadata["data_attributes"]) \
-                            + list(metadata["descriptive_attributes"])
+        init_attributes = list(metadata["data_attributes"]) \
+                        + list(metadata["descriptive_attributes"])
 
-            kwds = dict([(a, state.get(a, None)) for a in init_attributes])
+        kwds = dict([(a, state.get(a, None)) for a in init_attributes])
 
-            # Initiate the vectorizer.
-            vectorizer_class, vectorizer_kwds = kwds["vectorizer"]
-            klass = getattr(vectorizer_module, vectorizer_class)
-            kwds["vectorizer"] = klass(**vectorizer_kwds)
+        # Initiate the vectorizer.
+        vectorizer_class, vectorizer_kwds = kwds["vectorizer"]
+        klass = getattr(vectorizer_module, vectorizer_class)
+        kwds["vectorizer"] = klass(**vectorizer_kwds)
 
-            # Initiate the censors.
-            kwds["censors"] = censoring.Censors(**kwds["censors"])
+        # Initiate the censors.
+        kwds["censors"] = censoring.Censors(**kwds["censors"])
 
-            model = cls(**kwds)
+        model = cls(**kwds)
 
-            # Set training attributes.
-            for attr in metadata["trained_attributes"]:
-                setattr(model, "_{}".format(attr), state.get(attr, None))
+        # Set training attributes.
+        for attr in metadata["trained_attributes"]:
+            setattr(model, "_{}".format(attr), state.get(attr, None))
 
-            return model
-            
-        else:
-            raise NotImplementedError(
-                "Cannot auto-convert old model files yet; "
-                "contact Andy Casey <andrew.casey@monash.edu> if you need this")
+        return model
 
 
     def train(self, threads=None, op_method=None, op_strict=True, op_kwds=None,

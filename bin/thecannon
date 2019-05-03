@@ -1,0 +1,377 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+import argparse
+import numpy as np
+import os
+
+from astropy.table import (Table, join, unique)
+from collections import Counter
+from tqdm import tqdm 
+from warnings import warn
+
+from astra import log
+from astra.utils.data_models import parse_descriptors
+from astra.tools.parsers.common import component_parser
+from astra.tools.spectrum import (Spectrum1D, SpectrumList)
+
+from thecannon import continuum, vectorizer
+from thecannon.model import CannonModel
+
+
+if __name__ == '__main__':
+
+    parser = component_parser(prog=os.path.basename(__file__),
+                              description="The Cannon: A data-driven model for stellar spectra")
+
+    subparsers = parser.add_subparsers(help="Specify whether to train or test", dest="command")
+    subparsers.required = True
+
+    train_parser = subparsers.add_parser("train",
+                                         help="Train a data driven model given a training set of "
+                                              "labels and spectra")
+
+    train_parser.add_argument("label_path",
+                              help="The path that contains the labels for all input paths.")
+    train_parser.add_argument("label_names", 
+                              help="A comma-separated list of the label names to use in the model.")
+
+    train_parser.add_argument("--ignore-duplicates", action="store_true",
+                              help="if the INPUT_PATHs cannot be uniquely identified as rows in the "\
+                                   "LABEL_PATH file, then ignore the duplicate rows (default: False)")
+
+    # Data arguments.
+    train_parser.add_argument("--spectrum-index", default=0,
+                              help="the index of the spectrum to use in the training set spectra "
+                                   "(default: 0)")
+
+    # Continuum arguments.
+    train_parser.add_argument("--no-continuum", action="store_true",
+                              help="do not fit the pseudo-continuum")
+    train_parser.add_argument("--continuum-regions-path", 
+                              dest="continuum_regions_path", default=None,
+                              help="the path to a file describing regions of continuum pixels")
+    train_parser.add_argument("--continuum-length-scale",
+                              dest="continuum_length_scale", default=1400,
+                              help="the length scale (in pixels) for the sine and cosine functions "
+                                   "used in determining the continuum (default: 1400)")
+    train_parser.add_argument("--continuum-order",
+                              dest="continuum_order", default=3,
+                              help="the number of sine and cosine functions to use to fit the "\
+                                   "continuum (default: 3)")
+
+    # Model arguments.
+    train_parser.add_argument("--order", dest="order", default=2,
+                              help="the polynomial order of the model to use (default: 2; quadratic)")
+    train_parser.add_argument("--regularization", dest="regularization", default=0,
+                              help="the L1 regularization hyperparameter to use (default: 0)")
+
+    # Operational arguments.
+    train_parser.add_argument("-t", "--threads", dest="threads", default=1,
+                              help="number of parallel threads to use")
+
+
+    # Test step.
+    test_parser = subparsers.add_parser("test",
+                                        help="Use a pre-trained model to estimate stellar labels.")
+
+
+    # Model arguments.
+    test_parser.add_argument("model_path",
+                             help="the path to a pre-trained model")
+
+    # Data arguments.
+    test_parser.add_argument("--spectrum-index", default=0,
+                             help="the index of the spectrum to use in the training set spectra "
+                             "(default: 0)")
+
+
+    # Continuum arguments.
+    test_parser.add_argument("--no-continuum", action="store_true",
+                             help="do not fit the pseudo-continuum")
+    test_parser.add_argument("--continuum-regions-path", 
+                             dest="continuum_regions_path", default=None,
+                             help="the path to a file describing regions of continuum pixels")
+    test_parser.add_argument("--continuum-length-scale", 
+                             dest="continuum_length_scale", default=1400,
+                             help="the length scale (in pixels) for the sine and cosine functions "
+                                  "used in determining the continuum (default: 1400)")
+    test_parser.add_argument("--continuum-order", dest="continuum_order", default=3,
+                             help="the number of sine and cosine functions to use to fit the "
+                                  "continuum (default: 3)")
+
+    # Optimization arguments.
+    test_parser.add_argument("--initialisations", default=1,
+                             help="the number of initial points to optimize from (default: 1)")
+
+    # Operational arguments.
+    test_parser.add_argument("-t", "--threads", dest="threads", default=1,
+                             help="number of parallel threads to use")
+
+    # Parse.
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        warn(f"Ignoring unknown arguments: {unknown}")
+
+    if args.command == "train":
+
+        # Check for duplicates in input_paths.
+        if len(set(args.input_paths)) < len(args.input_paths):
+            counts = Counter(args.input_paths)
+            duplicates = "\n".join([f"\t{k}: {v} entries" for k, v in counts.items() if v > 1])
+            parser.error(f"there are duplicate paths in {args.input_path}:\n"
+                         f"{duplicates}")
+
+        # Load in all the labels.
+        log.info(f"Reading labels from {args.label_path}")
+        labels = Table.read(args.label_path)
+
+        # Ensure we can match the labels to the appropriate input paths.
+        if len(labels) == len(args.input_paths):
+            warn(f"Assuming each row in INPUT_PATHs corresponds to the same row in LABELS_PATH! "
+                  "If this is not true then you're going to have a very bad time!")
+
+        else:
+            raise NotImplementedError("danger Will Robinson")
+
+        # Build the labels array.
+        label_names = args.label_names.split(",")
+        log.info(f"Label names to use: {label_names}")
+        training_set_labels = np.array([labels[ln] for ln in label_names]).T
+
+        for i, label_name in enumerate(label_names):
+            minmax = [np.min(training_set_labels.T[i]), np.max(training_set_labels.T[i])]
+            log.info(f"Minimum/maximum {label_name} in training set: {minmax}")
+
+        # Find the first useful spectrum.
+        for first_spectrum_idx, input_path in enumerate(args.input_paths):
+
+            # Deal with all cases of size etc.
+            try:
+                N_pixels = np.atleast_2d(SpectrumList.read(input_path)[0].wavelength).shape[1]
+
+            except IOError:
+                continue
+
+            else:
+                break
+
+        else:
+            raise IOError("all input paths are corrupt or missing")
+
+        N_paths = len(args.input_paths)
+        log.info(f"There are {N_paths} spectra in the training set")
+        log.info(f"There are {N_pixels} assumed per spectrum")
+        log.info(f"Using spectrum index {args.spectrum_index} (zero-indexed) from --spectrum-index")
+
+        wavelengths = np.nan * np.ones((N_paths, N_pixels), dtype=float)
+        training_set_flux = np.ones_like(wavelengths)
+        training_set_ivar = np.zeros_like(wavelengths)
+
+        # Continuum normalize if necessary.
+        continuum_kwds = dict()
+        if not args.no_continuum:
+            continuum_kwds.update(L=args.continuum_length_scale, order=args.continuum_order)
+            if args.continuum_regions_path is not None:
+                continuum_kwds.update(continuum_regions=np.loadtxt(args.continuum_regions_path))
+
+            log.info(f"Pseudo-continuum normalization keywords: {continuum_kwds}")
+            log.info(f"Loading training set spectra and pseudo-continuum normalizing..")
+
+        else:
+            log.info(f"No pseudo-continuum normalization will take place!")
+            log.info(f"Loading training set spectra..")
+
+        for i, input_path in enumerate(tqdm(args.input_paths)):
+
+            if not os.path.exists(input_path):
+                log.info(f"Path {input_path} does not exist. Skipping..")
+                continue
+
+            try:
+                spectrum = Spectrum1D.read(input_path, verbosity=0)
+
+            except OSError:
+                log.info(f"Exception raised when trying to load {input_path}. Skipping..")
+                continue
+
+            # TODO: Write a general parallelised wrapper in Astra that makes use of tqdm
+            wavelengths[i] = spectrum.wavelength.value
+            
+            # Continuum normalize if necessary
+            if continuum_kwds:
+                norm_flux, norm_ivar, cont, meta = continuum.normalize(
+                    spectrum.wavelength.value, 
+                    spectrum.flux.value[args.spectrum_index], 
+                    spectrum.uncertainty.array[args.spectrum_index], **continuum_kwds)
+
+                # continuum.normalize will always return a 2D array
+                training_set_flux[i] = norm_flux[0]
+                training_set_ivar[i] = norm_ivar[0]
+
+            else:
+                training_set_flux[i] = spectrum.flux.value[args.spectrum_index]
+                training_set_ivar[i] = spectrum.uncertainty.array[args.spectrum_index]
+
+        log.info(f"Training set spectra loaded")
+        log.info(f"Creating common dispersion mapping..")
+
+        # Put everything on a common wavelength scale.
+        min_wl = np.nanmax(wavelengths[:, 0])
+        max_wl = np.nanmin(wavelengths[:, -1])
+
+        # Check for uniform sampling in linear or logarithmic space.
+        lin_space = np.std(np.diff(wavelengths[first_spectrum_idx]))
+        log_space = np.std(np.diff(np.log10(wavelengths[first_spectrum_idx])))
+
+        is_log_lambda_spaced = (lin_space > log_space)
+        if is_log_lambda_spaced:
+            log.info("Identified as uniform spacing in log-wavelength")
+            delta = np.mean(np.diff(np.log10(wavelengths[first_spectrum_idx])))
+            common_wavelengths = 10**np.arange(np.log10(min_wl), np.log10(max_wl) + delta, delta)
+
+        else:
+            log.info("Identified as uniform spacing in linear wavelength")
+            delta = np.mean(np.diff(wavelengths[first_spectrum_idx]))
+            common_wavelengths = np.arange(min_wl, max_wl + delta, delta)
+
+        log.info(f"Common wavelength grid {min_wl:.1f} to {max_wl:.1f} ({common_wavelengths.size} pixels")
+        assert common_wavelengths.size == training_set_flux.shape[1]
+
+        log.info(f"Re-sampling training set spectra onto common wavelength grid..")
+        for i, (wave_, flux_, ivar_) \
+        in enumerate(tqdm(zip(wavelengths, training_set_flux, training_set_ivar), total=N_paths)):
+            training_set_flux[i] = np.interp(common_wavelengths, wave_, flux_)
+            training_set_ivar[i] = np.interp(common_wavelengths, wave_, ivar_)
+
+        log.info(f"Correcting bad pixels..")
+        bad = (~np.isfinite(training_set_flux)) + (~np.isfinite(training_set_ivar))
+        training_set_flux[bad] = 1.0
+        training_set_ivar[bad] = 0.0
+        N_bad = np.sum(bad)
+        f_bad = 100 * N_bad/training_set_flux.size 
+        log.info(f"Corrected {N_bad} pixels ({f_bad:.0e}%)")
+
+        log.info(f"Creating the model")
+
+        model = CannonModel(training_set_labels, training_set_flux, training_set_ivar, 
+                            vectorizer=vectorizer.PolynomialVectorizer(label_names, args.order),
+                            dispersion=common_wavelengths, regularization=args.regularization)
+
+        log.info(f"Training the model {model}")
+        model.train(threads=args.threads)
+
+        # Prepare outputs.
+        os.makedirs(args.output_dir, exist_ok=True)
+        log.info(f"Created output directory {args.output_dir}")
+
+        # Write the model to disk.
+        output_path = os.path.join(args.output_dir, "Cannon.model")
+        model.write(output_path, include_training_set_spectra=False, overwrite=True)
+
+        log.info(f"Model ({model}) written to {output_path}")
+
+        log.info(f"Running one-to-one test for sanity")
+        test_labels, cov, meta = model.test(training_set_flux, training_set_ivar, threads=args.threads)
+        fig_path = os.path.join(args.output_dir, "one-to-one.png")
+
+        log.info(f"Creating figure..")
+        try:
+            from thecannon import plot
+            fig = plot.one_to_one(model, test_labels)
+            fig.savefig(fig_path)
+
+        except:
+            log.exception("Figure could not be produced:")
+
+        else:
+            log.info(f"Created output figure {fig_path}")
+
+
+    elif args.command == "test":
+
+        # Load the model.
+        model = CannonModel.read(args.model_path)
+        log.info(f"Loaded Cannon model from {args.model_path}: {model}")
+
+        # Check continuum.
+        continuum_kwds = dict()
+        if not args.no_continuum:
+            continuum_kwds.update(L=args.continuum_length_scale, order=args.continuum_order)
+            if args.continuum_regions_path is not None:
+                continuum_kwds.update(continuum_regions=np.loadtxt(args.continuum_regions_path))
+
+            log.info(f"Pseudo-continuum normalization keywords: {continuum_kwds}")
+
+        else:
+            log.info(f"No pseudo-continuum normalization will take place!")
+
+        log.info(f"We will access index {args.spectrum_index} from available spectra in each input path")
+
+        # Prepare outputs.
+        os.makedirs(args.output_dir, exist_ok=True)
+        log.info(f"Created output directory {args.output_dir}")
+
+        # The N and message keywords are just to suppress any progressbar from model.test()
+        test_kwds = dict(initialisations=args.initialisations, N=-1, message=None)
+
+        # TODO: spread over threads?
+
+        # For each input_path we must do the following:
+        N_paths = len(args.input_paths)
+        for i, input_path in enumerate(tqdm(args.input_paths, total=N_paths)):
+
+            # 1. Load the spectra.
+            # For some data models this could truly be a list of spectra of different sources.
+            # But for most it will be a Spectrum1D that may have multiple visits and spectra that have
+            # been combined in various ways.
+            try:
+                spectra = SpectrumList.read(input_path)
+
+            except OSError:
+                log.info(f"Exception raised when loading path {input_path}")
+                continue
+
+            if len(spectra) > 1:
+                # The spectra are of different objects. This is the case for the MaStar spectral library.
+                # TODO: Not sure if we *should* handle this yet.
+                raise NotImplementedError("MaNGA MaStar spectra cannot be processed by this component yet")
+
+            # TODO: allow spectrum index to be able to test on *all* spectra
+            spectrum = spectra[0]
+            N_spectra, N_pixels = spectrum.flux.shape
+
+            # 2. Re-sample onto the model dispersion.
+            # Re-sample onto the model dispersion.
+            # TODO: put this into the cannon utils because it will be needed for
+            #       training
+            flux = np.interp(model.dispersion,
+                             spectrum.wavelength.value,
+                             spectrum.flux.value[args.spectrum_index])
+            ivar = np.interp(model.dispersion,
+                             spectrum.wavelength.value,
+                             spectrum.uncertainty.array[args.spectrum_index])
+
+            # 3. Continuum-normalize if instructed.
+            # TODO: refactor continuum normalization to deal with Spectrum1D objects.
+            if continuum_kwds:
+                norm_flux, norm_ivar, cont, meta = continuum.normalize(
+                    spectrum.wavelength.value, 
+                    spectrum.flux.value[args.spectrum_index], 
+                    spectrum.uncertainty.array[args.spectrum_index], **continuum_kwds)
+
+            else:
+                norm_flux, norm_ivar = (flux, ivar)
+
+            # 4. Run the test step on the spectra.
+            labels, cov, meta = model.test(norm_flux, norm_ivar, **test_kwds)
+
+            # 5. Save the outputs.
+            # TODO: We need a data model specification for this.
+            log.info(f"Inferred labels: {labels}")
+            log.info(f"Metadata: {meta}")
+            log.error("Not saving output because no data model exists yet!")
+
+
+    else:
+        raise NotImplementedError("train or test. that's it.")
