@@ -1,6 +1,7 @@
-
-# numpy
-# astropy
+numpy
+astropy
+matplotlib
 pyyaml>=5.1
 pygments
 sdss_access>=0.2.3
+tqdm
