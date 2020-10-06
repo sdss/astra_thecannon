@@ -17,9 +17,9 @@ from warnings import warn
 
 from astra.utils import log
 
-from thecannon import (censoring, fitting, vectorizer as vectorizer_module, __version__)
-from thecannon.vectorizer.base import BaseVectorizer
-from thecannon.utils.wrapper import Wrapper
+from astra_thecannon import (censoring, fitting, vectorizer as vectorizer_module)
+from astra_thecannon.vectorizer.base import BaseVectorizer
+from astra_thecannon.utils.wrapper import Wrapper
 
 
 
@@ -508,7 +508,6 @@ class CannonModel(object):
 
         # Create a metadata dictionary.
         state["metadata"] = dict(
-            version=__version__,
             model_class=type(self).__name__,
             modified=str(datetime.now()),
             data_attributes=self._data_attributes,

@@ -17,8 +17,8 @@ import sys
 
 # The NAME variable should be of the format "sdss-thecannon".
 # Please check your NAME adheres to that format.
-NAME = 'thecannon'
-VERSION = '0.1.2dev'
+NAME = 'astra_thecannon'
+VERSION = '0.1.3dev'
 RELEASE = 'dev' in VERSION
 
 

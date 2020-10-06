@@ -9,7 +9,8 @@ import yaml
 # Inits the logging system. Only shell logging, and exception and warning catching.
 # File logging can be started by calling log.start_file_logger(name).
 from .utils import log
-
+from . import vectorizer
+from .model import CannonModel
 
 def merge(user, default):
     """Merges a user configuration with the default one."""
@@ -41,3 +42,4 @@ if os.path.exists(custom_config_path):
 
 
 __version__ = '0.1.2dev'
+

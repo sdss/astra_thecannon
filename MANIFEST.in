@@ -1,1 +1,1 @@
-recursive-include python/thecannon/etc *
+recursive-include python/astra_thecannon/etc *
