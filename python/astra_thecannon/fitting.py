@@ -147,7 +147,9 @@ def fit_spectrum(flux, ivar, initial_labels, vectorizer, theta, s2, fiducials,
     op_labels, cov, meta = results[best_result_index]
 
     # De-scale the optimized labels.
-    meta["model_flux"] = func(op_labels)
+    model_flux = np.ones_like(adjusted_ivar)
+    model_flux[use] = func(op_labels)
+    meta["model_flux"] = model_flux
     op_labels = op_labels * scales + fiducials
 
     if np.allclose(op_labels, meta["x0"]):

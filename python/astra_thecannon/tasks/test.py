@@ -6,25 +6,15 @@ import numpy as np
 from astra.tasks.base import BaseTask
 from astra.utils import log
 from astra.tools.spectrum import Spectrum1D
+from astra.tasks.io import ApStarFile
+from tqdm import tqdm
 
 import astra_thecannon as tc
 
-from .base import TheCannonTask
-from .train import Train
-
-'''
-from .train import Train
-
-class DummyTask(BaseTask):
-    def output(self):
-        raise NotImplementedError(
-            "You must overwrite the `requires()` function in the `astra_thecannon.tasks.Test` class "
-            "so that it provides an 'observation' and 'model' task."
-        )
-'''
+from astra_thecannon.tasks.base import TheCannonMixin
 
 
-class Test(TheCannonTask):
+class TestTheCannon(TheCannonMixin):
 
     # TODO: Allow for explicit initial values?
     N_initialisations = luigi.IntParameter(default=10)
@@ -37,46 +27,56 @@ class Test(TheCannonTask):
         )
 
 
-    def run(self):
+    def output(self):
+        raise NotImplementedError("This should be provided by the sub-classes")
+    
 
-        model = tc.CannonModel.read(self.input()["model"].path)
-        observation = Spectrum1D.read(self.input()["observation"].path)
+    def resample_observations(self, dispersion):
+        spectrum = Spectrum1D.read(self.input()["observation"].path)
 
-        # Re-sample observations on to the model dispersion.
-        o_x = observation.wavelength.value
-        o_f = np.atleast_2d(observation.flux.value)
-        o_i = np.atleast_2d(observation.uncertainty.quantity.value)
+        o_x = spectrum.wavelength.value
+        o_f = np.atleast_2d(spectrum.flux.value)
+        o_i = np.atleast_2d(spectrum.uncertainty.quantity.value)
 
-        N, P = shape = (o_f.shape[0], model.dispersion.size)
+        N, P = shape = (o_f.shape[0], dispersion.size)
         flux = np.empty(shape)
         ivar = np.empty(shape)
 
         for i in range(N):
-            flux[i] = np.interp(model.dispersion, o_x, o_f[i])
-            ivar[i] = np.interp(model.dispersion, o_x, o_i[i])
+            flux[i] = np.interp(dispersion, o_x, o_f[i])
+            ivar[i] = np.interp(dispersion, o_x, o_i[i])
 
-        kwds = dict(
-            flux=flux,
-            ivar=ivar,
-            initialisations=self.N_initialisations,
-            use_derivatives=self.use_derivatives
-        )
+        return (flux, ivar)
 
-        labels, cov, metadata = model.test(**kwds)
 
-        log.info(f"Inferred labels: {labels}")
-        log.info(f"Metadata: {metadata}")
+    def read_model(self):
+        return tc.CannonModel.read(self.input()["model"].path)
 
-        with open(self.output().path, "wb") as fp:
-            pickle.dump(
-                (labels, cov, metadata), 
-                fp
+
+    def run(self):
+
+        model = self.read_model()
+
+        # This can be run in batch mode.
+        for task in tqdm(self.get_batch_tasks()):
+            flux, ivar = task.resample_observations(model.dispersion)
+            labels, cov, metadata = model.test(
+                flux,
+                ivar,
+                initialisations=task.N_initialisations,
+                use_derivatives=task.use_derivatives
             )
+            
+            # TODO: Write outputs somewhere!
+            log.warn("Not writing outputs anywhere!")
 
+            '''
+            with open(task.output().path, "wb") as fp:
+                pickle.dump(
+                    (labels, cov, metadata), 
+                    fp
+                )
 
-    def output(self):
-        # By default place the outputs in the same directory as the observation input path.
-        output_path_prefix, ext = os.path.splitext(self.input()["observation"].path)
-        return luigi.LocalTarget(f"{output_path_prefix}-{self.task_id}.pkl")
-
+            task.trigger_event(luigi.Event.SUCCESS, task)
+            '''
 

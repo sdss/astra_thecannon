@@ -1,3 +1,3 @@
 
-from .train import Train
-from .test import Test
+from .train import TrainTheCannon
+from .test import TestTheCannon

@@ -268,7 +268,7 @@ def one_to_one(model, test_labels, cov=None, latex_label_names=None,
     scatter_kwds = dict(s=1, c="k", alpha=0.5)
     scatter_kwds.update(kwargs.get("scatter_kwds", {}))
 
-    errorbar_kwds = dict(fmt=None, ecolor="k", alpha=0.5, capsize=0)
+    errorbar_kwds = dict(fmt="None", ecolor="k", alpha=0.5, capsize=0)
     errorbar_kwds.update(kwargs.get("errorbar_kwds", {}))
 
     for i, ax in enumerate(axes):

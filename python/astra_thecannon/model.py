@@ -666,7 +666,7 @@ class CannonModel(object):
 
 
     @requires_training
-    def test(self, flux, ivar, initial_labels=None, initialisations=1,
+    def test(self, flux, ivar, dispersion=None, initial_labels=None, initialisations=1,
              threads=None, use_derivatives=True, op_kwds=None, **kwargs):
         """
         Run the test step on spectra.
@@ -676,6 +676,10 @@ class CannonModel(object):
 
         :param ivar:
             The inverse variance values for the spectral fluxes.
+
+        :param dispersion: [optional]
+            The dispersion values for the given flux and inverse variances. If given, then
+            the model will be interpolated to these dispersion values at runtime.
 
         :param initial_labels: [optional]
             The initial labels to try for each spectrum. This can be a single

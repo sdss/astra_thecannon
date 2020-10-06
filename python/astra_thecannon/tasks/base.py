@@ -1,18 +1,18 @@
 
 import pickle
 import luigi
+import numpy as np
 from astropy.table import Table
 from astra.tasks.base import BaseTask
 
 
-class TheCannonTask(BaseTask):
+class TheCannonMixin(BaseTask):
 
+    # These parameters are needed for both training and testing.
     label_names = luigi.Parameter()
-    # TODO: Allow for exact model instead of polynomial?
-    #       The vectorizer is flexible enough to allow anything!
     order = luigi.IntParameter(default=2)
     training_set_path = luigi.Parameter()
-    regularization = luigi.FloatParameter(default=0)
+
 
 
 
